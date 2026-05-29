@@ -1,0 +1,90 @@
+name: Publish BigWig Releases
+
+on:
+  workflow_dispatch:
+    inputs:
+      species_id:
+        description: Species identifier used in /mnt/a16/01_TSSHub_data
+        required: true
+        default: danio_rerio
+      assembly:
+        description: Reference assembly label
+        required: true
+        default: GRCz11
+      bioprojects:
+        description: Comma-separated BioProject accessions
+        required: true
+        default: PRJNA169500,PRJNA471311
+      data_root:
+        description: Self-hosted runner data root
+        required: true
+        default: /mnt/a16/01_TSSHub_data
+      release_suffix:
+        description: Release tag suffix
+        required: true
+        default: tssr-v1
+      clobber:
+        description: Replace existing release assets with the same names
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish BigWig release assets
+    runs-on: self-hosted
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Publish requested BioProjects
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SPECIES_ID: ${{ inputs.species_id }}
+          ASSEMBLY: ${{ inputs.assembly }}
+          BIOPROJECTS: ${{ inputs.bioprojects }}
+          DATA_ROOT: ${{ inputs.data_root }}
+          RELEASE_SUFFIX: ${{ inputs.release_suffix }}
+          CLOBBER: ${{ inputs.clobber }}
+        run: |
+          set -euo pipefail
+
+          clobber_arg=()
+          if [[ "${CLOBBER}" == "true" ]]; then
+            clobber_arg=(--clobber)
+          fi
+
+          IFS=',' read -ra projects <<< "${BIOPROJECTS}"
+          for raw_project in "${projects[@]}"; do
+            bioproject="${raw_project//[[:space:]]/}"
+            if [[ -z "${bioproject}" ]]; then
+              continue
+            fi
+
+            tag="${SPECIES_ID}-${ASSEMBLY}-${bioproject}-${RELEASE_SUFFIX}"
+            staging_dir="release-staging/${tag}"
+            title="${SPECIES_ID} ${ASSEMBLY} ${bioproject} TSSr BigWig"
+
+            python3 scripts/prepare_bigwig_release.py \
+              --data-root "${DATA_ROOT}" \
+              --species-id "${SPECIES_ID}" \
+              --assembly "${ASSEMBLY}" \
+              --bioproject "${bioproject}" \
+              --repository "${REPOSITORY}" \
+              --release-tag "${tag}" \
+              --output-dir "${staging_dir}"
+
+            python3 scripts/upload_release_assets.py \
+              --repository "${REPOSITORY}" \
+              --tag "${tag}" \
+              --title "${title}" \
+              --body-file "${staging_dir}/release_body.md" \
+              --assets-nul "${staging_dir}/assets.nul" \
+              "${clobber_arg[@]}"
+          done
+
